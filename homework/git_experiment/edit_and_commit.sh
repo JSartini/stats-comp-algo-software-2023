@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+git add foo.pdf
+git commit -m "Add tracking for PDF output of TeX source file"
+
 for commit_count in {2..100}
 do
   let linenum="10+$commit_count"
