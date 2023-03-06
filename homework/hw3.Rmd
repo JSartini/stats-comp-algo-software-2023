@@ -1,7 +1,9 @@
 ---
-title: "Homework: Newton's method for generalized linear models"
+title: 'Homework: Newton''s method for generalized linear models'
 output:
-  html_notebook: 
+  html_document:
+    df_print: paged
+  html_notebook:
     code_folding: none
     highlight: textmate
 ---
@@ -96,5 +98,8 @@ Why?
 
 ## Things to commit/submit
 
-* Link to the pull request.
-* (Optional) Answer to the bonus question.
+### Link to the pull request
+The pull request for the new feature branch can be found [here](https://github.com/JSartini/hiperglm/pull/2)
+
+### Answer to bonus
+One cannot guarantee the accuracy of the confidence interval estimates due to the procedure of estimation. For GLM fitting, the standard procedure for estimating the parameter variance-covariance matrix, from which the asymptotic confidence intervals are derived, requires inversion of $X^TW(\beta)X$ for covariance matrix $X$ and weight matrix $W(\beta)$, which depends upon the estimate $\beta$ and particular GLM chosen. No matter how close the estimated parameter $\hat{\beta}$ is to the MLE, producing a better estimate of $W(\beta)$, it is still possible that the draw of covariates $X$ produces $X^TW(\hat{\beta})X$ which has a very large condition number and is ill-conditioned, meaning that the inversion could potentially produce very large errors just due to limits in numerical precision. Due to this possibility, one cannot make any guarantees on the accuracy of the confidence intervals using the same procedure as is applied to ensure accuracy of the parameter MLE estimate.
