@@ -1,6 +1,8 @@
 ---
 title: 'Homework: Numerical linear algebra'
 output:
+  html_document:
+    df_print: paged
   html_notebook:
     code_folding: none
     highlight: textmate
@@ -22,7 +24,7 @@ MathJax.Hub.Config({
 ```{r setup, include=FALSE}
 source(file.path("..", "R", "util.R"))
 
-required_packages <- c("microbenchmark")
+required_packages <- c("microbenchmark", "bench")
 install_and_load_packages(required_packages)
 ```
 
@@ -43,6 +45,10 @@ What are relative speeds among the algorithms?
 Do relative speeds agree with what you expect from the complexity analyses?
 If not (quite), why might that be?
 
+**Response:**
+Here, the Cholesky decomposition is fastest with median time 233ms, followed by the LU decomposition with median time 453ms, and then finally QR decomposition, the slowest with median time 834ms. This ordering makes some sense given the complexity analyses undergone for these algorithms during lecture, where it was indicated that Cholesky decomposition has complexity of order $\frac{1}{3}p^3$, LU decomposition has complexity of order $\frac{2}{3}p^3$, and QR decomposition has order $2np^2$ for $p$ parameters and $n$ number of data points. Here, $n = p = 1024$, meaning that the Cholesky decomposition should take about half of the time of the LU decomposition, which itself would take around $1/3$ the time of the QR decomposition. The relative timing relationship between the Cholesky and LU decompositions actually plays out nearly exactly as expected, but the QR decomposition-based solving does not take 3 times as long as the LU decomposition; the time taken is in fact less than doubled. This is likely due to optimization under the hood for the QR decomposition, such that the full decomposition is likely not being calculated - evidenced by the fact that the QR matrices are not accessible/returned through the qr() family of functions. For the LU decomposition on the other hand, it is likely that the full decomposition is determined, as the standard procedure for solving via LU decomposition inherently involves explicit calculation of L and U.
+
+
 **Note:**
 I misspoke about the R's built-in `chol()` function during the lecture:
 when applied to a positive-definite `A`, the function actually returns an _upper-triangular_ matrix `R` such that `t(R) %*% R == A`.
@@ -56,7 +62,8 @@ A <- rand_positive_def_matrix(mat_size, cond_num = 1e3)
 b <- rnorm(mat_size)
 
 solve_via_cholesky <- function(A, b) {
-  # Fill in
+  R = chol(A)
+  return(backsolve(R, forwardsolve(t(R), b)))
 }
 
 bench::mark(
@@ -66,7 +73,7 @@ bench::mark(
   solve_via_cholesky(A, b)
 )
 bench::mark(
-  # Solve via QR decomposition
+  qr.solve(qr(A), b)
 )
 ```
 
@@ -88,6 +95,40 @@ What is the relative difference in $\ell^2$-norm?
 How about the coordinate-wise relative differences?
 Are the observed magnitudes of the differences what you'd expect?
 
+**Response:** 
+The relative difference in $\ell^2$-norm due to moving from double precision to long double is -3.958355e-16, while the coordinate-wise relative differences have mean -2.877685e-16, variance 4.761493e-28, and quantiles described by the following table (with the full explicit vector printed as output):
+
+```{r, echo=FALSE}
+source(file.path("R", "random_matrix.R"))
+Rcpp::sourceCpp(file.path("src", "matvec_double.cpp"))
+Rcpp::sourceCpp(file.path("src", "matvec_ldouble.cpp"))
+
+set.seed(1918)
+
+mat_size <- 1024L
+A <- rand_positive_def_matrix(mat_size, cond_num = 1e3)
+x <- rnorm(mat_size)
+
+# Fill in
+std_result = matvec_double(A, x)
+prec_result = matvec_ldouble(A, x)
+
+std_l2 = sqrt(sum((std_result)^2))
+prec_l2 = sqrt(sum((prec_result)^2))
+
+relative_l2 = (prec_l2 - std_l2)/std_l2
+
+relative_coord = (prec_result - std_result)/std_result
+quantile(relative_coord, p = c(0, 0.25, 0.5, 0.75, 1))
+```
+
+To see whether these are logical magnitudes of difference, recall first the result from lecture indicating that algorithms for solving $Ax = b$ with $b$ known should satisfy $\frac{||x_{true} - x||}{||x||} = \mathcal{O}(\kappa(A)\epsilon_{machine})$. This implies then that the same thing holds for solving $x = A^{-1}b$ for known $b$. Given this, as well as the fact that $\kappa(A) = \frac{1}{\kappa(A^{-1})}$ by definition, it follows that the problem $v \rightarrow Av$ with output $x$ will have relative error satisfying $\frac{||x_{true} - x||}{||x||} = \mathcal{O}(\frac{\epsilon_{machine}}{\kappa(A)})$. 
+
+Now, for matrix $A$ as generated, the condition number is known to be $1e3$. Then, the machine precisions for the double and long double case are $2^{-52} \approx 2.220446e-16$ and $2^{-63} \approx 1.084202e-19$ respectively. These facts, in conjunction with the condition number for $A$ as chosen, imply then that the relative errors in the outputs of the two matrix multiplications should be on the order of $1e-16$ and $1e-19$ for the double and long-double case respectively. One can then apply the triangle inequality and approximation of the exact output to find that the relative difference in $\ell^2$-norm will be $\mathcal{O}(1e-16)$, which plays out exactly in this case, so indeed the magnitude of relative difference in $\ell-2$ is as expected. 
+
+The element-wise differences are also not entirely unexpected, as in the worst case one could easily see orders on the scale well above the order of $2^{-52}$ in each entry of $b$ simply due to accumulated errors stemming from the difference in machine precision and compounding due to matrix-vector multiplication of $2^10 = 1024$-dimensional inputs. This accounts for the large distribution in errors presented above. However, assuming something like uniformity of the missing digits of precision, one would expect on average for the error to be around the double machine precision, and this is what is observed. 
+
+
 ```{r, eval=FALSE}
 Rcpp::sourceCpp(file.path("src", "matvec_double.cpp"))
 Rcpp::sourceCpp(file.path("src", "matvec_ldouble.cpp"))
@@ -99,7 +140,17 @@ A <- rand_positive_def_matrix(mat_size, cond_num = 1e3)
 x <- rnorm(mat_size)
 
 # Fill in
+std_result = matvec_double(A, x)
+prec_result = matvec_ldouble(A, x)
 
+std_l2 = sqrt(sum((std_result)^2))
+prec_l2 = sqrt(sum((prec_result)^2))
+
+relative_l2 = (prec_l2 - std_l2)/std_l2
+
+relative_coord = (prec_result - std_result)/std_result
+mean(relative_coord)
+var(relative_coord)
 ```
 
 ### Task &#x2F06;
@@ -111,7 +162,7 @@ Then solve a positive-definite system $\bA \bx = \bb$ for $\bx$ using the three 
 Which algorithm appears to be more accurate than the others? 
 Visually demonstrate your answer.
 
-```{r, eval=FALSE}
+```{r, results=FALSE}
 set.seed(1918)
 cond_num <- 1e6
 
@@ -120,10 +171,56 @@ mat_size <- 1024L
 
 A <- rand_positive_def_matrix(mat_size, cond_num)
 x <- rnorm(mat_size)
+x_l2 = sqrt(sum(x^2))
+  
+# Solve with higher precision
+b <- matvec_ldouble(A, x)
 
-# Fill in
+# LU Decomposition
+LU_soln = solve(A, b)
+LU_soln_l2 = sqrt(sum((LU_soln)^2))
+print((LU_soln_l2 - x_l2)/x_l2)
+print(sqrt(sum((LU_soln - x)^2)))
 
+# Cholesky Decomposition
+R = chol(A)
+Chol_soln = backsolve(R, forwardsolve(t(R), b))
+Chol_soln_l2 = sqrt(sum((Chol_soln)^2))
+print((Chol_soln_l2 - x_l2)/x_l2)
+print(sqrt(sum((Chol_soln - x)^2)))
+
+# QR Decomposition
+QR_soln = qr.solve(qr(A), b)
+QR_soln_l2 = sqrt(sum((QR_soln)^2))
+print((QR_soln_l2 - x_l2)/x_l2)
+print(sqrt(sum((QR_soln - x)^2)))
 ```
+
+```{r, echo=FALSE}
+library(ggplot2)
+library(tidyverse)
+plot_df = data.frame(X = x, LU_x = LU_soln, Chol_x = Chol_soln, QR_x = QR_soln) %>%
+  as.matrix() %>%
+  t()
+
+mds = cmdscale(dist(plot_df), k = 2) %>%
+  data.frame() %>%
+  rownames_to_column(var = "label") %>%
+  mutate(dist = sqrt((X1 - first(X1))^2 + (X2 - first(X2))^2)) %>%
+  mutate(dist = formatC(dist, format = "e", digits = 2)) %>%
+  mutate(dist = case_when(dist == "0.00e+00" ~ "",
+                          TRUE ~ dist)) %>%
+  mutate(Y1 = first(X1), Y2 = first(X2))
+
+ggplot(mds, aes(x = X1, y = X2, label = label)) + 
+  geom_point() + 
+  geom_text(nudge_y = 0, nudge_x = -2.5e-11) + 
+  geom_text(aes(label = dist), nudge_y = 0, nudge_x = 3e-11) + 
+  geom_segment(aes(x = X1, y = X2, xend = Y1, yend = Y2)) + 
+  xlim(-3e-10, 2e-10)
+```
+
+Note that the above plot is a multi-dimensional scaling of the $x$ vectors produced using each solving procedure. This plot projects the $x$ points in 1024-dimensional space down to 2-dimensions while preserving the distances between them. According to this plot, the Cholesky decomposition is the closest to the "ground truth" x vector, followed by LU decomposition, then finally the QR decomposition.
 
 ### Task &#x4E09;
 
@@ -150,8 +247,8 @@ source(file.path("R", "num_linalg_sim_study_helper.R"))
 n_sim <- 32L
 mat_size <- 512L
 cond_num <- 1e6
-metrics <- c("norm", "median", "five_percentile", "ninety_five_percentile")
-  # TODO: add another metric and modify the helper script accordingly
+metrics <- c("norm", "median", "five_percentile", "ninety_five_percentile", 
+             "l1norm")
 
 rel_error_list <- lapply(
   c("lu", "chol", "qr"), 
@@ -162,8 +259,12 @@ for (sim_index in 1:n_sim) {
   A <- rand_positive_def_matrix(mat_size, cond_num)
   x <- rnorm(mat_size) 
   b <- matvec_ldouble(A, x)
+  
+  R = chol(A)
   x_approx <- list( 
-    # Fill in
+    lu = solve(A, b),
+    chol = backsolve(R, forwardsolve(t(R), b)),
+    qr = qr.solve(qr(A), b, tol = .Machine$double.eps)
   )
   for (method in c("lu", "chol", "qr")) {
     rel_error <- lapply(
@@ -177,6 +278,11 @@ for (sim_index in 1:n_sim) {
   }
 }
 
-# TODO: visually compare errors
+qr_df <- data.frame(Method = "QR", errors = rel_error_list[["qr"]])
+lu_df <- data.frame(Method = "LU", errors = rel_error_list[["lu"]])
+ch_df <- data.frame(Method = "Chol", errors = rel_error_list[["chol"]])
+
+plot_df = rbind(rbind(qr_df, lu_df), ch_df)
+
 
 ```
