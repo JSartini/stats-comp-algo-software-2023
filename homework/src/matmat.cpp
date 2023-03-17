@@ -44,22 +44,3 @@ NumericMatrix col_oriented_matmat(
   return result;
 }
 
-// [[Rcpp::export]] 
-NumericMatrix col_oriented_alt( // Included for purposes of testing syntactic sugar
-    const NumericMatrix& A, const NumericMatrix& B
-) {
-  if (A.ncol() != B.nrow()) {
-    Rcpp::stop("Incompatible dimensions");
-  }
-  int n_row_out = A.nrow();
-  int n_col_out = B.ncol();
-  int n_dot = B.nrow();
-  NumericMatrix result(n_row_out, n_col_out);
-  std::fill(result.begin(), result.end(), 0);
-  for (int j = 0; j < n_col_out; ++j) {
-    for (int i = 0; i < n_dot; ++i) {
-      result(Rcpp::_, j) = result(Rcpp::_, j) + B(i, j) * A(Rcpp::_, i);
-    }
-  }
-  return result;
-}
