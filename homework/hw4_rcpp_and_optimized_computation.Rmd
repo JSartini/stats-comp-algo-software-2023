@@ -24,7 +24,7 @@ cat(readLines(file.path("src", "inner_prod.cpp")), sep = '\n')
 
 Ignoring the bug for the moment, run the code below and see what you get.
 
-```{r, eval=FALSE}
+```{r, warning=FALSE}
 Rcpp::sourceCpp(file.path("src", "inner_prod.cpp"))
 
 vec_size <- 1023L
@@ -37,7 +37,7 @@ Still ignoring the bug, run the code below that calculates the same inner produc
 I mean, whether there is a bug or not, an output of a deterministic calculation should surely be the same each time?
 Try running the code chunk multiple times. 
 
-```{r, error=TRUE, eval=FALSE}
+```{r, error=TRUE}
 first_val <- inner_prod(v, w)
 
 for (i in 1:10^6) {
@@ -52,8 +52,9 @@ for (i in 1:10^6) {
 ```
 
 **Questions:**
-What behavior do you observe above? How do you explain it?
+What is the behavior you observe above? How do you explain it?
 
+**Response:** Not only is the inner product not correct, the supposedly deterministic calculation in fact does not always produce an identical value. In fact, the calculation produces what appears to be random outputs, many of them of incredibly large magnitude. This is likely due to the fact that the buggy code sums from the first index to the length of the vector. This works in R's default 1-based indexing, but not RCPP's 0-based indexing. This right-shift of 1 entry results in summation of the product of whatever values are sitting directly after the input arrays in memory. As the arrays are allocated for each loop, these values change each time as observed.
 
 ## Part B: Sloppy matrix-matrix multiplication
 
@@ -68,7 +69,7 @@ cat(readLines(file.path("src", "gemm_eigen_unprotected.cpp")), sep = '\n')
 
 Run the code below using the above "unprotected" matrix-matrix multiplication.
 
-```{r, eval=FALSE}
+```{r, warning=FALSE}
 Rcpp::sourceCpp(file.path("src", "gemm_eigen_unprotected.cpp"))
 
 A <- matrix(1, nrow = 4, ncol = 1024)
@@ -79,6 +80,9 @@ dgemm_eigen(A, B)
 
 **Questions:**
 What do you get as an output? What if you re-run the code chunk? Explain the observed behavior.
+
+**Response:**
+The result in each case is a $4 \times 2$ matrix, with the first column always uniformly having the value of 1024 and the second column having varying values, with many having quite large magnitudes and NaN's often appearing. This is likely due to how matrices are stored in memory here, by columns. In particular, one finds that the 2 columns of $B$ are stored next to one another in memory, likely being read as a single logical "column" when performing the left-multiplication by $A$. This means that, in calculating the first column of the output matrix, each 1024-dimensional row of $A$ is effectively being multiplied by both columns of $B$ concatenated into a single 1024-dimensional entity. As all entries in $A$ and $B$ are 1, this results in the observed values of 1024 in all entries of the first column of the output. However, for the second column, the calculation is not "saved" by this row concatenation. To form this portion of the output, the C++ library performs the inner product of each row of $A$ with the 512-dimensional columns of $B$ along with the subsequent 512 spaces in memory evaluated as numerics. These values can truly be anything within the full range of double precision, as there could be anything stored in that stretch of memory. It is this fact, in conjunction with movement of where $A$ and $B$ are allocated in memory with each subsequent iteration, that causes the second column of the output to have such random and eratic values.
 
 ## Part C: Consequence of "tresspassing"
 
@@ -113,6 +117,9 @@ Running the same piece of code from an R console (instead of an RStudio session)
 * Why does the second code chunk run fine?
 * Modify `axpy_c.cpp` to make the function safer to use.
 
+**Response:**
+When running the first code chunk, the session crashes upon running the axpy_c() function, whereas the second chunk produces a defined output. The first chunk, due to the implementation of axpy_c() and the $x$ input being longer than the $y$ input, results in the function attempting to overwrite memory adjacent to the $y$ input vector. For these tests, this results in attempting to overwrite an address vital to functioning of R, causing a segfault due to invalid write permissions. Even if this type of catastrophic failure does not occur though, this type of inadvertent buffer overrun can result in unknowingly changing data in memory, potentially leading to errors in later calculations. The second chunk only does not cause an error due to the fact that $y$ is longer than $x$ and the iteration loop within axpy_c() is based upon the length of $x$. In particular, the code in the second chunk above results in only the first 1000 entries of $y$ being incremented by $3.14 \times 1$ (in-place). This does not overrun the buffer, so no inadvertent overwriting occurs (but the result is still likely not what is expected). In particular, one expects a vector-scalar product such as this to operate only on vectors of the same length, which can be enforced by appending a check for this (check whether x.size() != y.size()) to the beginning of the function.
+
 
 # Exercise 3: Multiplying two matrices ain't quite what you learned in your linear algebra class
 
@@ -127,11 +134,11 @@ So a conceptually natural way to implement a matrix multiplication is looping th
 Implement a matrix-matrix multiplication based on this approach as `row_col_dot_matmat` using the starter code provided in the `matmat.cpp` file.
 Then check that its output agrees with the base R matrix multiplication.
 
-```{r, eval=FALSE}
+```{r, warning=FALSE}
 Rcpp::sourceCpp(file.path("src", "matmat.cpp"))
 ```
 
-```{r, eval=FALSE}
+```{r}
 n_row_out <- 1024L
 n_inner <- 2048L
 n_col_out <- 512L
@@ -141,6 +148,10 @@ B <- matrix(rnorm(n_inner * n_col_out), nrow = n_inner, ncol = n_col_out)
 
 ```{r}
 # Check the output of `row_col_dot_matmat`
+row_col_out = row_col_dot_matmat(A, B)
+base_out = A %*% B
+
+are_all_close(row_col_out, base_out)
 ```
 
 ## Part B: Going one step beyond your linear algebra class
@@ -152,15 +163,27 @@ Then compare performances of `row_col_dot_matmat` and `col_oriented_matmat` (but
 Which one is faster and why?
 
 ```{r}
-# Check and benchmark
+# Check
+col_oriented_out = col_oriented_matmat(A, B)
+are_all_close(col_oriented_out, base_out)
+
+# Benchmark
+bench::mark(row_col_dot_matmat(A, B))
+bench::mark(col_oriented_matmat(A, B))
 ```
+
+**Response:**
+As expected, the column-oriented matrix multiplication is faster, on the order of 6-times faster in fact. This is due to the fact that matrices are stored in column-major order in memory for Rcpp/R, such that column-oriented matrix multiplication has much greater likelihood of the requisite sequential data being in cache when compared to standard row-column matrix multiplication. It is this difference in cache misses which produces the observed differences in time taken. 
 
 Also compare with performance of the matrix-matrix multiplication via `%*%` in R, which uses whatever the BLAS library your R was configured with.
 (You can find out which BLAS library R is using via `sessionInfo()` or `extSoftVersion()`.) 
 
 ```{r}
-# Fill in
+bench::mark(A %*% B)
+bench::mark(col_oriented_matmat(A, B))
 ```
+
+**Response:** While the column-oriented Rcpp matrix multiplication method implemented outperformed the standard row-column implementation quite significantly, its performance is very similar to that of the built-in BLAS library, only slightly out-performing it in the benchmark above. The presence of a difference in the performance at all is likely a result of the particular syntax used in my implementation and how that is handled by the compiler.
 
 When benchmarking alternative implementations (or alternative algorithms, more generally), keep in mind that the relative performance depends significantly on the size of a test problem.
 It is important, therefore, to benchmark your implementation/algorithm on problems of realistic size. 
@@ -198,7 +221,7 @@ In compiling Rcpp code, you can turn on and off these additional options by modi
 To specify the compiler options for a specific R package, you can place such an Makevars file under the `src/` directory.
 To specify the global options that affect all Rcpp code compilations on your computer, you can edit the Makevars file at the location given by `tools::makevars_user()`, which is typically `~/.R/Makevars` in Unix.
 For example, to turn on AVX and FMA, you would add a line `CXXFLAGS += -mavx -mfma` in the Makevars file; 
-to turn off SSE, you woud add `CXXFLAGS += -mno-sse`.
+to turn off SSE, you would add `CXXFLAGS += -mno-sse`.
 You can read more about the role of Makevars files [here](https://stackoverflow.com/questions/43597632/understanding-the-contents-of-the-makevars-file-in-r-macros-variables-r-ma).
 
 **To-do's:**
@@ -208,12 +231,36 @@ Selectively turn on and off SSE, AVX, and FMA to see how each option affects the
 Finally, turn on both AVX and FMA and check the resulting performances.
 Report what you find.
 
-```{r, warning=FALSE, eval=FALSE}
+```{r, warning=FALSE, eval=FALSE, warning=FALSE}
 # Import `dgemm_eigen()` from lecture
 Rcpp::sourceCpp(file.path("..", "lecture", "src", "gemm_eigen.cpp"))
 ```
 
-```{r, eval=FALSE}
+```{r, eval=FALSE, warning=FALSE}
+# Import `dgemm_eigen()` from lecture
+Rcpp::sourceCpp(file.path("..", "lecture", "src", "gemm_eigen.cpp"))
+Rcpp::sourceCpp(file.path("src", "matmat.cpp"))
+
+n_row_out <- 1024L
+n_inner <- 2048L
+n_col_out <- 512L
+A <- matrix(rnorm(n_row_out * n_inner), nrow = n_row_out, ncol = n_inner)
+B <- matrix(rnorm(n_inner * n_col_out), nrow = n_inner, ncol = n_col_out)
+
 # Benchmark
-dgemm_eigen(A, B)
+bench::mark(dgemm_eigen(A, B), min_iterations = 250)
+bench::mark(col_oriented_matmat(A, B), min_iterations = 250)
 ```
+
+The results of the benchmark are summarized in the following table.
+
+| Flags   | Eigen Benchmark (Median) | My Function Benchmark (Median) |
+|---------|-----------------|-----------------------|
+| Default (SSE Enabled) | 258ms | 1.14s |
+| SSE Disabled | 693ms  | 1.34s |
+| AVX Enabled (+SSE by default)| 167ms | 1.03s |
+| FMA Enabled (+SSE by default)|  95.6ms | 1.01s |
+| AVX+FMA Enabled (+SSE by default)| 76.2ms | 866s |
+
+First, it should be noted that in every case the optimized Eigen-based matrix multiplication out-performed my column-oriented implementation, nearly always by well over a factor of 2. In the default case, with only SSE enabled such that 128-bit registers are being used, the Eigen-based implementation was around 5 to 6 times faster than my own, handily beating it. However, with SSE turned off, the Eigen implementation falls to just 2 times faster than mine, while my column-oriented function suffered much less relative loss in performance. This is indicative of my implementation not as effectively leveraging these wider 128-bit registers, or any registers wider than the default 64-bit, as is evidenced by the lack of significant reduction in time-taken for my implementation with AVX enabled, which allows for use of 256-bit registers. This is contrasted by a significant speedup for the Eigen-based implementation, which takes a little over half the time with both SSE and AVX enabled as compared to just SSE. For FMA, a similar modest speed-up is seen for my implementation, contrasted with the Eigen-based implementation which achieves performance gains even greater than those it receives from enabling AVX. With both AVX and FMA are enabled, my implementation does complete the computation significantly faster than under any other configuration, but the relative speed-up compared to the other flag settings is still smaller than that achieved by the Eigen-based implementation. So, it is clear from these results that the Eigen-based implementation is not only far more efficient, but it more efficiently leverages these hardware accelerations as well.
+

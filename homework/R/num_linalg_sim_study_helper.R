@@ -15,9 +15,9 @@ calc_rel_error <- function(v, v_approx, metric) {
   } else {
     coordwise_err <- abs((v - v_approx) / v)
     rel_error <- switch(metric,
-      five_percentile = { quantile(coordwise_err, 0.05) },
+      percentile5 = { quantile(coordwise_err, 0.05) },
       median = { median(coordwise_err) },
-      ninety_five_percentile = { quantile(coordwise_err, 0.95) }
+      percentile95 = { quantile(coordwise_err, 0.95) }
     )
   }
   return(rel_error)

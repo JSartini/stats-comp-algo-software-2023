@@ -46,7 +46,7 @@ Do relative speeds agree with what you expect from the complexity analyses?
 If not (quite), why might that be?
 
 **Response:**
-Here, the Cholesky decomposition is fastest with median time 233ms, followed by the LU decomposition with median time 453ms, and then finally QR decomposition, the slowest with median time 834ms. This ordering makes some sense given the complexity analyses undergone for these algorithms during lecture, where it was indicated that Cholesky decomposition has complexity of order $\frac{1}{3}p^3$, LU decomposition has complexity of order $\frac{2}{3}p^3$, and QR decomposition has order $2np^2$ for $p$ parameters and $n$ number of data points. Here, $n = p = 1024$, meaning that the Cholesky decomposition should take about half of the time of the LU decomposition, which itself would take around $1/3$ the time of the QR decomposition. The relative timing relationship between the Cholesky and LU decompositions actually plays out nearly exactly as expected, but the QR decomposition-based solving does not take 3 times as long as the LU decomposition; the time taken is in fact less than doubled. This is likely due to optimization under the hood for the QR decomposition, such that the full decomposition is likely not being calculated - evidenced by the fact that the QR matrices are not accessible/returned through the qr() family of functions. For the LU decomposition on the other hand, it is likely that the full decomposition is determined, as the standard procedure for solving via LU decomposition inherently involves explicit calculation of L and U.
+Here, the LU decomposition is fastest with median time 233ms, followed by the LU decomposition with median time 453ms, and then finally QR decomposition, the slowest with median time 834ms. This ordering makes some sense given the complexity analyses undergone for these algorithms during lecture, where it was indicated that Cholesky decomposition has complexity of order $\frac{1}{3}p^3$, LU decomposition has complexity of order $\frac{2}{3}p^3$, and QR decomposition has order $\frac{4}{3}np^2 = \frac{4}{3}p^3$ for this $n=p$ case with $p$ parameters and $n$ number of data points. Note that, while the QR-decomposition complexity analysis performed in class was for solving least squares, this is actually algebraically identical to solving the system, as solving $Ax = b$ for $x$ and $A = QR$ implies calculating $R^{-1}Q^Ty$, the same formulation used to find coefficients in least squares. This means that the Cholesky decomposition should take about half of the time of the LU decomposition, which itself would take around half the time of the QR decomposition. However, none of these expected relationships appear as expected in my own testing. According to the results below, the Cholesky and LU decomposition-based methods actually swapped order, with LU being around 24% faster. Then, the QR decomposition, while indeed slower than the other two, does not take double the time of the LU-based method nor quadruple the time of the Cholesky-based method. These differences are likely due to optimizations under the hood for each of these methods, such that the full decompositions are likely not being calculated.
 
 
 **Note:**
@@ -67,13 +67,13 @@ solve_via_cholesky <- function(A, b) {
 }
 
 bench::mark(
-  solve(A, b)
+  solve(A, b), min_iterations = 100
 )
 bench::mark(
-  solve_via_cholesky(A, b)
+  solve_via_cholesky(A, b), min_iterations = 100
 )
 bench::mark(
-  qr.solve(qr(A), b)
+  qr.solve(A, b), min_iterations = 100
 )
 ```
 
@@ -98,7 +98,7 @@ Are the observed magnitudes of the differences what you'd expect?
 **Response:** 
 The relative difference in $\ell^2$-norm due to moving from double precision to long double is -3.958355e-16, while the coordinate-wise relative differences have mean -2.877685e-16, variance 4.761493e-28, and quantiles described by the following table (with the full explicit vector printed as output):
 
-```{r, echo=FALSE}
+```{r, echo=FALSE, warning=FALSE}
 source(file.path("R", "random_matrix.R"))
 Rcpp::sourceCpp(file.path("src", "matvec_double.cpp"))
 Rcpp::sourceCpp(file.path("src", "matvec_ldouble.cpp"))
@@ -180,20 +180,17 @@ b <- matvec_ldouble(A, x)
 LU_soln = solve(A, b)
 LU_soln_l2 = sqrt(sum((LU_soln)^2))
 print((LU_soln_l2 - x_l2)/x_l2)
-print(sqrt(sum((LU_soln - x)^2)))
 
 # Cholesky Decomposition
 R = chol(A)
 Chol_soln = backsolve(R, forwardsolve(t(R), b))
 Chol_soln_l2 = sqrt(sum((Chol_soln)^2))
 print((Chol_soln_l2 - x_l2)/x_l2)
-print(sqrt(sum((Chol_soln - x)^2)))
 
 # QR Decomposition
-QR_soln = qr.solve(qr(A), b)
+QR_soln = qr.solve(A, b)
 QR_soln_l2 = sqrt(sum((QR_soln)^2))
 print((QR_soln_l2 - x_l2)/x_l2)
-print(sqrt(sum((QR_soln - x)^2)))
 ```
 
 ```{r, echo=FALSE}
@@ -220,7 +217,7 @@ ggplot(mds, aes(x = X1, y = X2, label = label)) +
   xlim(-3e-10, 2e-10)
 ```
 
-Note that the above plot is a multi-dimensional scaling of the $x$ vectors produced using each solving procedure. This plot projects the $x$ points in 1024-dimensional space down to 2-dimensions while preserving the distances between them. According to this plot, the Cholesky decomposition is the closest to the "ground truth" x vector, followed by LU decomposition, then finally the QR decomposition.
+Note that the above plot is a multi-dimensional scaling of the $x$ vectors produced using each solving procedure. This plot projects the $x$ points in 1024-dimensional space down to 2-dimensions while preserving the distances between them. Do note that the y-axis is much finer than the x-axis here, so the best reference for the actual distances are the labels attached to each solution. The plot itself serves mostly for spatial orientation. According to this plot, the LU decomposition is the closest to the "ground truth" x vector, followed by the Cholesky decomposition, then finally the QR decomposition.
 
 ### Task &#x4E09;
 
@@ -240,49 +237,86 @@ We also vary the condition number of $\bA$ and assess whether the results would 
 The QR solver will throw an error when the system is ill-condition enough that the numerical solution might not be very accurate. 
 To force it to return the solution in any case, set `tol = .Machine$double.eps`.
 
-```{r, eval=FALSE}
+```{r}
 # Utility functions for bookkeeping simulation results.
+library(tidyverse)
 source(file.path("R", "num_linalg_sim_study_helper.R"))
 
-n_sim <- 32L
-mat_size <- 512L
-cond_num <- 1e6
-metrics <- c("norm", "median", "five_percentile", "ninety_five_percentile", 
-             "l1norm")
-
-rel_error_list <- lapply(
-  c("lu", "chol", "qr"), 
-  function(method) pre_allocate_error_list(n_sim, metrics)
-)
-
-for (sim_index in 1:n_sim) {
-  A <- rand_positive_def_matrix(mat_size, cond_num)
-  x <- rnorm(mat_size) 
-  b <- matvec_ldouble(A, x)
+perform_simulation <- function(cond_num = 1e6) {
+  n_sim <- 250L
+  mat_size <- 512L
+  metrics <- c("norm", "median", "percentile5", "percentile95",
+               "l1norm")
   
-  R = chol(A)
-  x_approx <- list( 
-    lu = solve(A, b),
-    chol = backsolve(R, forwardsolve(t(R), b)),
-    qr = qr.solve(qr(A), b, tol = .Machine$double.eps)
-  )
-  for (method in c("lu", "chol", "qr")) {
-    rel_error <- lapply(
-      metrics, 
-      function (metric) calc_rel_error(x, x_approx[[method]], metric)
+  rel_error_list <- lapply(c("lu", "chol", "qr"),
+                           function(method)
+                             pre_allocate_error_list(n_sim, metrics))
+  
+  for (sim_index in 1:n_sim) {
+    A <- rand_positive_def_matrix(mat_size, cond_num)
+    x <- rnorm(mat_size)
+    b <- matvec_ldouble(A, x)
+    
+    R = chol(A)
+    x_approx <- list(
+      lu = solve(A, b),
+      chol = backsolve(R, forwardsolve(t(R), b)),
+      qr = qr.solve(A, b, tol = .Machine$double.eps)
     )
-    names(rel_error) <- metrics
-    for (metric in names(rel_error)) {
-      rel_error_list[[method]][[metric]][sim_index] <- rel_error[[metric]]
+    for (method in c("lu", "chol", "qr")) {
+      rel_error <- lapply(metrics,
+                          function (metric)
+                            calc_rel_error(x, x_approx[[method]], metric))
+      names(rel_error) <- metrics
+      for (metric in names(rel_error)) {
+        rel_error_list[[method]][[metric]][sim_index] <- rel_error[[metric]]
+      }
     }
   }
+  
+  qr_df <-
+    data.frame(Method = "QR", errors = rel_error_list[["qr"]]) %>%
+    pivot_longer(!Method, names_to = "Metric", values_to = "Error") %>%
+    separate(Metric, c(NA, "Metric"))
+  
+  lu_df <-
+    data.frame(Method = "LU", errors = rel_error_list[["lu"]]) %>%
+    pivot_longer(!Method, names_to = "Metric", values_to = "Error") %>%
+    separate(Metric, c(NA, "Metric"))
+  
+  ch_df <-
+    data.frame(Method = "Chol", errors = rel_error_list[["chol"]]) %>%
+    pivot_longer(!Method, names_to = "Metric", values_to = "Error") %>%
+    separate(Metric, c(NA, "Metric"))
+  
+  plot_df = rbind(rbind(qr_df, lu_df), ch_df)
+  out_plot = plot_df %>%
+    ggplot(aes(x = Error)) + 
+    geom_density(aes(group = Method, color = Method, fill = Method), alpha = 0.2) + 
+    facet_wrap(~ Metric, scales = "free") + 
+    scale_y_continuous(breaks = c()) + 
+    theme(axis.text.x = element_text(angle = 45, vjust = 0, hjust=0.1))
+  
+  return(out_plot)
 }
-
-qr_df <- data.frame(Method = "QR", errors = rel_error_list[["qr"]])
-lu_df <- data.frame(Method = "LU", errors = rel_error_list[["lu"]])
-ch_df <- data.frame(Method = "Chol", errors = rel_error_list[["chol"]])
-
-plot_df = rbind(rbind(qr_df, lu_df), ch_df)
-
-
 ```
+
+Note that the visual exploration of the different error metrics for each solving method was facilitated by functionalization of simulation running and plot production. In this procedure, the distributions of each error measure for each solving method are calculated based upon the simulated data and displayed. Here, as the relative shapes of the distribution between the 3 solving methods is the most important feature, the actual density magnitudes are not displayed.
+
+## Condition number 1e6 Visualizations
+```{r, fig.heigh=10}
+perform_simulation(1e6)
+```
+
+## Condition number 1e9 Visualizations
+```{r}
+perform_simulation(1e9)
+```
+
+## Condition number 1e12 Visualizations
+```{r}
+perform_simulation(1e12)
+```
+
+**Elaboration upon Results:** 
+The most striking pattern above, which appears to be the case for all 5 metrics which summarize the calculation error, is that the QR decomposition has a much wider error distribution compared to those of the Cholesky and LU decompositions, which are comparable to one another in most cases. As such, it is clear from these simulations and the corresponding figures that the QR decomposition tends to produce greater errors across all condition numbers than the other two decompositions. Returning to the stability results from lecture, recall that using the Cholesky and LU decompositions should result in normed error of order equal to the product of the matrix condition number and machine error, $O(\kappa(A)\epsilon_{machine})$, while the QR decomposition applied to this task (using Householder matrices) achieves $[\kappa(A) + \frac{||Ax_{machine} - y||}{||Ax_{machine}||}\kappa^2(A)] \times \epsilon_{machine}$, which will inherently be larger, making the results above logical. This is where it becomes evident that the QR decomposition saves quite a lot of work and is quite stable for the task of solving least squares, does not receive those same gains for solving simple systems. It performs the same procedure here as in solving least squares, causing it to be less stable and take longer than the other algorithms.
